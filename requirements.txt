@@ -1,0 +1,16 @@
+# Firefox Forensics Extraction Tool
+# Python 3.9+ standard library only (no external dependencies)
+
+# This tool uses only Python standard library modules:
+# - sqlite3: SQLite database access
+# - json: JSON file parsing
+# - csv: CSV export
+# - pathlib: Filesystem operations
+# - logging: Event logging
+# - argparse: CLI argument parsing
+# - datetime: Timestamp conversion
+# - dataclasses: Data structures
+# - typing: Type hints
+
+# No pip install required - all modules are built-in.
+# Zero dependencies = maximum portability and security.
