@@ -41,6 +41,12 @@ from formatters import (
     ReportGenerator,
     extract_credentials_from_data,
 )
+from nss_decrypt import (
+    decrypt_firefox_passwords,
+    check_master_password_required,
+    DecryptedLogin,
+    MasterPasswordRequired,
+)
 
 
 # ANSI color codes for terminal output
@@ -99,6 +105,42 @@ def print_credentials_summary(credentials: list):
     print(f"\n{colorize('═' * 70, Colors.RED)}")
     print(f"{colorize(f'Total: {len(credentials)} credential(s) found', Colors.BOLD + Colors.RED)}")
     print(f"{colorize('═' * 70, Colors.RED)}\n")
+
+
+def print_decrypted_passwords(passwords: list):
+    """Print decrypted Firefox passwords to terminal."""
+    if not passwords:
+        print(f"\n{colorize('ℹ️  No saved passwords found in this profile.', Colors.YELLOW)}")
+        return
+    
+    print(f"\n{colorize('═' * 70, Colors.RED)}")
+    print(f"{colorize('🔓 DECRYPTED SAVED PASSWORDS', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('═' * 70, Colors.RED)}")
+    
+    for i, pwd in enumerate(passwords, 1):
+        print(f"\n{colorize(f'[{i}]', Colors.YELLOW)} {colorize(pwd.hostname, Colors.MAGENTA)}")
+        print(f"    {colorize('Username:', Colors.CYAN)} {colorize(pwd.username, Colors.GREEN + Colors.BOLD)}")
+        print(f"    {colorize('Password:', Colors.CYAN)} {colorize(pwd.password, Colors.RED + Colors.BOLD)}")
+        if pwd.times_used:
+            print(f"    {colorize('Times Used:', Colors.CYAN)} {pwd.times_used}")
+        if pwd.form_submit_url:
+            print(f"    {colorize('Submit URL:', Colors.CYAN)} {pwd.form_submit_url}")
+    
+    print(f"\n{colorize('═' * 70, Colors.RED)}")
+    print(f"{colorize(f'Total: {len(passwords)} saved password(s) decrypted', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('═' * 70, Colors.RED)}\n")
+
+
+def prompt_master_password() -> str:
+    """Prompt user for Firefox master password."""
+    import getpass
+    print(f"\n{colorize('🔐 This profile has a master password set.', Colors.YELLOW)}")
+    try:
+        password = getpass.getpass(f"{colorize('?', Colors.GREEN)} Enter master password: ")
+        return password
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return ""
 
 
 def print_goodbye():
@@ -182,6 +224,117 @@ def prompt_path(question: str, default: str = None) -> Path:
                 # User doesn't want to create - ask for another path
                 print(f"  {colorize('Please enter a different path or 0 to exit', Colors.YELLOW)}")
                 continue
+                
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return None
+
+
+def get_firefox_profiles() -> list:
+    """Read Firefox profiles.ini and return list of profiles.
+    
+    Returns:
+        List of dicts with profile info: {'name': str, 'path': str, 'is_default': bool, 'full_path': Path}
+    """
+    import configparser
+    
+    firefox_dir = Path.home() / ".mozilla" / "firefox"
+    profiles_ini = firefox_dir / "profiles.ini"
+    
+    if not profiles_ini.exists():
+        return []
+    
+    profiles = []
+    default_path = None
+    
+    try:
+        config = configparser.ConfigParser()
+        config.read(profiles_ini)
+        
+        # First pass: find the default path from Install sections
+        for section in config.sections():
+            if section.startswith('Install'):
+                if config.has_option(section, 'Default'):
+                    default_path = config.get(section, 'Default')
+                    break
+        
+        # Second pass: collect all profiles
+        for section in config.sections():
+            if section.startswith('Profile'):
+                name = config.get(section, 'Name', fallback='Unknown')
+                path = config.get(section, 'Path', fallback='')
+                is_relative = config.getboolean(section, 'IsRelative', fallback=True)
+                
+                if is_relative:
+                    full_path = firefox_dir / path
+                else:
+                    full_path = Path(path)
+                
+                # Check if this is the default profile
+                is_default = (path == default_path) if default_path else False
+                
+                if full_path.exists():
+                    profiles.append({
+                        'name': name,
+                        'path': path,
+                        'is_default': is_default,
+                        'full_path': full_path
+                    })
+    except Exception:
+        return []
+    
+    return profiles
+
+
+def prompt_profile_selection() -> Path:
+    """Prompt user to select a Firefox profile.
+    
+    Returns:
+        Path to selected profile or None if cancelled.
+    """
+    profiles = get_firefox_profiles()
+    
+    if not profiles:
+        print(f"{colorize('No Firefox profiles found in ~/.mozilla/firefox/', Colors.RED)}")
+        return None
+    
+    print(f"\n{colorize('Available Firefox Profiles:', Colors.CYAN)}")
+    print(f"{colorize('─' * 50, Colors.CYAN)}")
+    
+    for i, profile in enumerate(profiles, 1):
+        default_marker = colorize(' (default)', Colors.GREEN + Colors.BOLD) if profile['is_default'] else ''
+        print(f"  {colorize(f'[{i}]', Colors.YELLOW)} {profile['name']}{default_marker}")
+        print(f"      {colorize('Path:', Colors.CYAN)} {profile['path']}")
+    
+    print(f"  {colorize('[0]', Colors.RED)} Exit")
+    print()
+    
+    # Find default profile index
+    default_idx = next((i for i, p in enumerate(profiles, 1) if p['is_default']), 1)
+    
+    prompt = f"{colorize('?', Colors.GREEN)} Select profile [{default_idx}]: "
+    
+    while True:
+        try:
+            response = input(prompt).strip()
+            
+            if not response:
+                # Use default
+                return profiles[default_idx - 1]['full_path']
+            
+            if response == '0':
+                return None
+            
+            try:
+                choice = int(response)
+                if 1 <= choice <= len(profiles):
+                    selected = profiles[choice - 1]
+                    print(f"  {colorize('✓', Colors.GREEN)} Selected: {selected['name']}")
+                    return selected['full_path']
+                else:
+                    print(f"  {colorize(f'Please enter a number between 1 and {len(profiles)}, or 0 to exit', Colors.YELLOW)}")
+            except ValueError:
+                print(f"  {colorize('Please enter a valid number', Colors.YELLOW)}")
                 
         except (KeyboardInterrupt, EOFError):
             print()
@@ -328,6 +481,8 @@ def extract_profile(
     logger: logging.Logger,
     formats: list = None,
     interactive: bool = True,
+    format_provided: bool = False,
+    output_provided: bool = False,
 ) -> bool:
     """Main orchestration function for profile extraction.
     
@@ -337,6 +492,8 @@ def extract_profile(
         logger: Logger instance.
         formats: List of output formats ['html', 'csv', 'md']
         interactive: Whether to prompt for user input.
+        format_provided: Whether -f flag was provided (skip format prompt).
+        output_provided: Whether -o flag was provided (skip output prompt).
     
     Returns:
         True if extraction completed successfully.
@@ -363,15 +520,12 @@ def extract_profile(
 
     # Interactive prompts
     if interactive:
-        if not prompt_yes_no("Proceed with extraction?"):
-            print(f"{colorize('Extraction cancelled.', Colors.YELLOW)}")
-            print_goodbye()
-            return False
+        # Only prompt for formats if -f flag was not provided
+        if not format_provided:
+            formats = prompt_formats()
         
-        formats = prompt_formats()
-        
-        save_output = prompt_yes_no("Save output to disk?")
-        if save_output:
+        # Always save to disk, but ask for path if -o was not provided
+        if not output_provided:
             output_dir = prompt_path(
                 "Enter output directory",
                 default=str(output_dir)
@@ -380,8 +534,6 @@ def extract_profile(
                 # User entered 0 to exit
                 print_goodbye()
                 return False
-    else:
-        save_output = True
 
     # Create output directories
     print(f"\n{colorize('Creating output directory:', Colors.CYAN)} {output_dir}")
@@ -416,13 +568,56 @@ def extract_profile(
     # Print credentials to terminal (highlighted)
     print_credentials_summary(credentials)
 
+    # Decrypt saved passwords
+    print(f"\n{colorize('═' * 70, Colors.RED)}")
+    print(f"{colorize('🔓 Decrypting Saved Passwords', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('═' * 70, Colors.RED)}")
+    
+    decrypted_passwords = []
+    
+    # First try without master password
+    passwords, error = decrypt_firefox_passwords(profile_path, "")
+    
+    if error and "master password" in error.lower():
+        # Master password is required
+        if interactive:
+            master_password = prompt_master_password()
+            if master_password:
+                passwords, error = decrypt_firefox_passwords(profile_path, master_password)
+            else:
+                print(f"  {colorize('⚠ Skipping password decryption (no master password provided)', Colors.YELLOW)}")
+                error = None  # User chose to skip
+        else:
+            print(f"  {colorize('⚠ Master password required but running non-interactively', Colors.YELLOW)}")
+    
+    if error:
+        print(f"  {colorize(f'⚠ Password decryption failed: {error}', Colors.YELLOW)}")
+    elif passwords:
+        decrypted_passwords = passwords
+        print_decrypted_passwords(passwords)
+        
+        # Add decrypted passwords to credentials list
+        for pwd in passwords:
+            credentials.append({
+                'type': 'Saved Password',
+                'source': 'logins.json (decrypted)',
+                'field': 'password',
+                'value': pwd.password,
+                'extra': {
+                    'URL': pwd.hostname,
+                    'Username': pwd.username,
+                    'Times Used': pwd.times_used or 0,
+                }
+            })
+
     # Calculate summary stats (use values from extract_databases)
     summary = {
         'databases': len(db_results),
         'tables': total_tables,
         'total_rows': total_rows,
         'json_files': len(json_data),
-        'credentials': len(credentials)
+        'credentials': len(credentials),
+        'decrypted_passwords': len(decrypted_passwords)
     }
 
     # Create ForensicData object
@@ -438,36 +633,35 @@ def extract_profile(
     )
 
     # Generate reports in requested formats
-    if save_output:
-        print(f"\n{colorize('═' * 70, Colors.GREEN)}")
-        print(f"{colorize('📝 Generating Reports', Colors.BOLD + Colors.GREEN)}")
-        print(f"{colorize('═' * 70, Colors.GREEN)}")
-        
-        report_gen = ReportGenerator(forensic_data)
-        
-        if 'html' in formats:
-            html_path = output_dir / f"forensics_report.html"
-            with open(html_path, 'w', encoding='utf-8') as f:
-                f.write(report_gen.html_formatter.generate())
-            print(f"  {colorize('✓', Colors.GREEN)} HTML Report: {html_path}")
-        
-        if 'md' in formats:
-            md_path = output_dir / f"forensics_report.md"
-            with open(md_path, 'w', encoding='utf-8') as f:
-                f.write(report_gen.md_formatter.generate())
-            print(f"  {colorize('✓', Colors.GREEN)} Markdown Report: {md_path}")
-        
-        if 'csv' in formats:
-            csv_dir = output_dir / "csv_export"
-            csv_files = report_gen.csv_formatter.save_all(csv_dir)
-            print(f"  {colorize('✓', Colors.GREEN)} CSV Files: {len(csv_files)} files in {csv_dir}")
-        
-        # Generate master report (legacy format)
-        master_report = ForensicReportGenerator.generate_master_report(
-            profile_path, db_results, json_data, output_dir
-        )
-        master_report_path = output_dir / "master_report.md"
-        master_report_path.write_text(master_report)
+    print(f"\n{colorize('═' * 70, Colors.GREEN)}")
+    print(f"{colorize('📝 Generating Reports', Colors.BOLD + Colors.GREEN)}")
+    print(f"{colorize('═' * 70, Colors.GREEN)}")
+    
+    report_gen = ReportGenerator(forensic_data)
+    
+    if 'html' in formats:
+        html_path = output_dir / f"forensics_report.html"
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(report_gen.html_formatter.generate())
+        print(f"  {colorize('✓', Colors.GREEN)} HTML Report: {html_path}")
+    
+    if 'md' in formats:
+        md_path = output_dir / f"forensics_report.md"
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(report_gen.md_formatter.generate())
+        print(f"  {colorize('✓', Colors.GREEN)} Markdown Report: {md_path}")
+    
+    if 'csv' in formats:
+        csv_dir = output_dir / "csv_export"
+        csv_files = report_gen.csv_formatter.save_all(csv_dir)
+        print(f"  {colorize('✓', Colors.GREEN)} CSV Files: {len(csv_files)} files in {csv_dir}")
+    
+    # Generate master report (legacy format)
+    master_report = ForensicReportGenerator.generate_master_report(
+        profile_path, db_results, json_data, output_dir
+    )
+    master_report_path = output_dir / "master_report.md"
+    master_report_path.write_text(master_report)
 
     # Summary
     print(f"\n{colorize('═' * 70, Colors.GREEN)}")
@@ -481,19 +675,19 @@ def extract_profile(
     print(f"  • Total rows: {colorize(total_rows_str, Colors.YELLOW)}")
     print(f"  • JSON artifacts: {colorize(str(summary['json_files']), Colors.YELLOW)}")
     print(f"  • Credentials found: {colorize(str(summary['credentials']), Colors.RED + Colors.BOLD)}")
+    print(f"  • Passwords decrypted: {colorize(str(summary.get('decrypted_passwords', 0)), Colors.RED + Colors.BOLD)}")
     
-    if save_output:
-        print(f"\n{colorize('Output saved to:', Colors.CYAN)} {output_dir}")
-        print(f"\n{colorize('Files created:', Colors.CYAN)}")
-        for subdir in ["databases", "forensics", "reports", "artifacts", "csv_export"]:
-            subpath = output_dir / subdir
-            if subpath.exists():
-                file_count = len(list(subpath.rglob("*.*")))
-                print(f"  📁 {subdir}/: {file_count} files")
-        
-        # List main reports
-        for report_file in output_dir.glob("forensics_report.*"):
-            print(f"  📄 {report_file.name}")
+    print(f"\n{colorize('Output saved to:', Colors.CYAN)} {output_dir}")
+    print(f"\n{colorize('Files created:', Colors.CYAN)}")
+    for subdir in ["databases", "forensics", "reports", "artifacts", "csv_export"]:
+        subpath = output_dir / subdir
+        if subpath.exists():
+            file_count = len(list(subpath.rglob("*.*")))
+            print(f"  📁 {subdir}/: {file_count} files")
+    
+    # List main reports
+    for report_file in output_dir.glob("forensics_report.*"):
+        print(f"  📄 {report_file.name}")
 
     print_goodbye()
     return True
@@ -509,13 +703,13 @@ def main():
     parser.add_argument(
         "profile",
         nargs="?",
-        help="Path to Firefox profile directory (required)",
+        help="Path to Firefox profile directory (optional - will auto-detect if not provided)",
     )
 
     parser.add_argument(
         "--output",
         "-o",
-        default=os.path.expanduser("~/Downloads/firefox_forensics_output"),
+        default=None,
         help="Output directory name (default: ~/Downloads/firefox_forensics_output)",
     )
 
@@ -571,31 +765,35 @@ def main():
             print()
         return 0
 
-    # Validate profile argument
-    if not args.profile:
-        parser.print_help()
-        print(f"\n{colorize('Error: Profile path is required', Colors.RED)}")
-        return 1
+    # Handle profile path - auto-detect if not provided
+    if args.profile:
+        # User provided profile path
+        try:
+            profile_path = expand_firefox_path(args.profile)
+        except Exception as e:
+            logger.error(f"Invalid profile path: {e}")
+            return 1
+    else:
+        # Auto-detect: show profile selection
+        print_banner()
+        profile_path = prompt_profile_selection()
+        if profile_path is None:
+            print_goodbye()
+            return 0
 
-    # Expand and validate profile path
-    try:
-        profile_path = expand_firefox_path(args.profile)
-    except Exception as e:
-        logger.error(f"Invalid profile path: {e}")
-        return 1
-
-    # Parse formats
+    # Parse formats - track if user explicitly specified format
+    format_provided = args.format != 'all'
     if args.format == 'all':
         formats = ['html', 'csv', 'md']
     else:
         formats = [args.format]
 
-    # Create output directory
-    try:
+    # Track if user specified output path
+    output_provided = args.output is not None
+    if args.output:
         output_dir = Path(args.output)
-    except Exception as e:
-        logger.error(f"Invalid output path: {e}")
-        return 1
+    else:
+        output_dir = Path.home() / "Downloads" / "firefox_forensics_output"
 
     # Run extraction
     try:
@@ -605,7 +803,9 @@ def main():
             output_dir,
             logger,
             formats=formats,
-            interactive=interactive
+            interactive=interactive,
+            format_provided=format_provided,
+            output_provided=output_provided,
         )
         return 0 if success else 1
     except KeyboardInterrupt:
