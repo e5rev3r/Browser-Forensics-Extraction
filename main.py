@@ -103,12 +103,12 @@ def print_banner():
 def print_credentials_summary(credentials: list):
     """Print highlighted credentials to terminal."""
     if not credentials:
-        print(f"\n{colorize('ℹ️  No credentials found in this profile.', Colors.YELLOW)}")
+        print(f"\n{colorize('[*] No credentials found in this profile.', Colors.YELLOW)}")
         return
     
-    print(f"\n{colorize('═' * 70, Colors.RED)}")
-    print(f"{colorize('🔐 CREDENTIALS & SENSITIVE DATA FOUND', Colors.BOLD + Colors.RED)}")
-    print(f"{colorize('═' * 70, Colors.RED)}")
+    print(f"\n{colorize('=' * 70, Colors.RED)}")
+    print(f"{colorize('[!] CREDENTIALS & SENSITIVE DATA FOUND', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('=' * 70, Colors.RED)}")
     
     for i, cred in enumerate(credentials, 1):
         print(f"\n{colorize(f'[{i}]', Colors.YELLOW)} {colorize(cred.get('type', 'Unknown'), Colors.MAGENTA)}")
@@ -129,12 +129,12 @@ def print_credentials_summary(credentials: list):
 def print_decrypted_passwords(passwords: list):
     """Print decrypted Firefox passwords to terminal."""
     if not passwords:
-        print(f"\n{colorize('ℹ️  No saved passwords found in this profile.', Colors.YELLOW)}")
+        print(f"\n{colorize('[*] No saved passwords found in this profile.', Colors.YELLOW)}")
         return
     
-    print(f"\n{colorize('═' * 70, Colors.RED)}")
-    print(f"{colorize('🔓 DECRYPTED SAVED PASSWORDS', Colors.BOLD + Colors.RED)}")
-    print(f"{colorize('═' * 70, Colors.RED)}")
+    print(f"\n{colorize('=' * 70, Colors.RED)}")
+    print(f"{colorize('[!] DECRYPTED SAVED PASSWORDS', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('=' * 70, Colors.RED)}")
     
     for i, pwd in enumerate(passwords, 1):
         print(f"\n{colorize(f'[{i}]', Colors.YELLOW)} {colorize(pwd.hostname, Colors.MAGENTA)}")
@@ -153,7 +153,7 @@ def print_decrypted_passwords(passwords: list):
 def prompt_master_password() -> str:
     """Prompt user for Firefox master password."""
     import getpass
-    print(f"\n{colorize('🔐 This profile has a master password set.', Colors.YELLOW)}")
+    print(f"\n{colorize('[*] This profile has a master password set.', Colors.YELLOW)}")
     try:
         password = getpass.getpass(f"{colorize('?', Colors.GREEN)} Enter master password: ")
         return password
@@ -164,10 +164,10 @@ def prompt_master_password() -> str:
 
 def print_goodbye():
     """Print goodbye message."""
-    print(f"\n{colorize('═' * 70, Colors.CYAN)}")
-    print(f"{colorize('👋 Thank you for using Firefox Forensics Tool!', Colors.BOLD + Colors.CYAN)}")
+    print(f"\n{colorize('=' * 70, Colors.CYAN)}")
+    print(f"{colorize('Thank you for using Firefox Forensics Tool!', Colors.BOLD + Colors.CYAN)}")
     print(f"{colorize('   Goodbye!', Colors.CYAN)}")
-    print(f"{colorize('═' * 70, Colors.CYAN)}\n")
+    print(f"{colorize('=' * 70, Colors.CYAN)}\n")
 
 
 def prompt_yes_no(question: str, default: bool = True) -> bool:
@@ -188,6 +188,96 @@ def prompt_yes_no(question: str, default: bool = True) -> bool:
         except (KeyboardInterrupt, EOFError):
             print()
             return False
+
+
+def prompt_output_exists(output_dir: Path) -> str:
+    """Prompt user when output directory already has forensic files.
+    
+    Args:
+        output_dir: Path to output directory
+    
+    Returns:
+        'overwrite' to overwrite existing files
+        'increment' to create incremental output directory
+        'cancel' to cancel operation
+        None if no existing files found
+    """
+    # Check for existing forensic output files
+    existing_files = []
+    check_patterns = ['forensics_report.*', 'report.html', 'report.json', 'summary.txt', 'master_report.md']
+    
+    for pattern in check_patterns:
+        existing_files.extend(list(output_dir.glob(pattern)))
+    
+    if not existing_files:
+        return None  # No existing files, proceed normally
+    
+    print(f"\n{colorize('[!] Output directory contains existing forensic files:', Colors.YELLOW)}")
+    for f in existing_files[:5]:  # Show max 5 files
+        print(f"    - {f.name}")
+    if len(existing_files) > 5:
+        print(f"    ... and {len(existing_files) - 5} more")
+    
+    print(f"\n{colorize('Choose an option:', Colors.CYAN)}")
+    print(f"  {colorize('[1]', Colors.YELLOW)} Overwrite existing files")
+    print(f"  {colorize('[2]', Colors.YELLOW)} Create new incremental directory (e.g., output_2, output_3)")
+    print(f"  {colorize('[0]', Colors.RED)} Cancel operation")
+    
+    prompt = f"{colorize('?', Colors.GREEN)} Select option [1]: "
+    
+    while True:
+        try:
+            response = input(prompt).strip()
+            
+            if not response or response == '1':
+                confirm = prompt_yes_no("Are you sure you want to overwrite existing files?", default=False)
+                if confirm:
+                    return 'overwrite'
+                continue
+            
+            if response == '2':
+                return 'increment'
+            
+            if response == '0':
+                return 'cancel'
+            
+            print(f"  {colorize('Please enter 1, 2, or 0', Colors.YELLOW)}")
+            
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return 'cancel'
+
+
+def get_incremental_output_dir(base_dir: Path) -> Path:
+    """Generate an incremental output directory name.
+    
+    Args:
+        base_dir: Base directory path
+    
+    Returns:
+        New path with incremental suffix (e.g., output_2, output_3)
+    """
+    base_name = base_dir.name
+    parent = base_dir.parent
+    
+    # Check if name already has a numeric suffix
+    import re
+    match = re.match(r'^(.+)_(\d+)$', base_name)
+    if match:
+        base_name = match.group(1)
+        start_num = int(match.group(2)) + 1
+    else:
+        start_num = 2
+    
+    # Find next available number
+    counter = start_num
+    while True:
+        new_dir = parent / f"{base_name}_{counter}"
+        if not new_dir.exists():
+            return new_dir
+        counter += 1
+        if counter > 1000:  # Safety limit
+            raise ValueError("Could not find available directory name")
 
 
 def prompt_path(question: str, default: str = None) -> Path:
@@ -233,7 +323,7 @@ def prompt_path(question: str, default: str = None) -> Path:
             if create:
                 try:
                     path.mkdir(parents=True, exist_ok=True)
-                    print(f"  {colorize('✓', Colors.GREEN)} Directory created: {path}")
+                    print(f"  {colorize('[+]', Colors.GREEN)} Directory created: {path}")
                     return path
                 except Exception as e:
                     print(f"  {colorize(f'Cannot create directory: {e}', Colors.RED)}")
@@ -362,7 +452,7 @@ def prompt_profile_selection() -> Path:
                 choice = int(response)
                 if 1 <= choice <= len(profiles):
                     selected = profiles[choice - 1]
-                    print(f"  {colorize('✓', Colors.GREEN)} Selected: {selected['name']}")
+                    print(f"  {colorize('[+]', Colors.GREEN)} Selected: {selected['name']}")
                     return selected['full_path']
                 else:
                     print(f"  {colorize(f'Please enter a number between 1 and {len(profiles)}, or 0 to exit', Colors.YELLOW)}")
@@ -545,10 +635,10 @@ def extract_profile(
     # Get profile info
     profile_info = get_profile_info(profile_path)
     
-    print(f"{colorize('📁 Profile:', Colors.CYAN)} {profile_info['name']}")
-    print(f"{colorize('📍 Path:', Colors.CYAN)} {profile_path}")
-    print(f"{colorize('💾 Size:', Colors.CYAN)} {profile_info.get('total_size_formatted', 'unknown')}")
-    print(f"{colorize('📄 Files:', Colors.CYAN)} {profile_info.get('file_count', 'unknown')}")
+    print(f"{colorize('Profile:', Colors.CYAN)} {profile_info['name']}")
+    print(f"{colorize('Path:', Colors.CYAN)} {profile_path}")
+    print(f"{colorize('Size:', Colors.CYAN)} {profile_info.get('total_size_formatted', 'unknown')}")
+    print(f"{colorize('Files:', Colors.CYAN)} {profile_info.get('file_count', 'unknown')}")
     print()
 
     # Interactive prompts
@@ -568,6 +658,24 @@ def extract_profile(
                 print_goodbye()
                 return False
 
+    # Convert to Path object
+    output_dir = Path(output_dir) if not isinstance(output_dir, Path) else output_dir
+    
+    # Check for existing output files if directory exists
+    if interactive and output_dir.exists():
+        action = prompt_output_exists(output_dir)
+        
+        if action == 'cancel':
+            print(f"\n{colorize('Operation cancelled by user.', Colors.YELLOW)}")
+            print_goodbye()
+            return False
+        elif action == 'increment':
+            output_dir = get_incremental_output_dir(output_dir)
+            print(f"\n{colorize('[+]', Colors.GREEN)} Using new directory: {output_dir}")
+        elif action == 'overwrite':
+            print(f"\n{colorize('[+]', Colors.GREEN)} Will overwrite existing files in: {output_dir}")
+        # If action is None, no existing files, proceed normally
+
     # Create output directories
     print(f"\n{colorize('Creating output directory:', Colors.CYAN)} {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -580,21 +688,21 @@ def extract_profile(
         return False
 
     # Extract databases
-    print(f"\n{colorize('═' * 70, Colors.BLUE)}")
-    print(f"{colorize('📊 Extracting SQLite Databases', Colors.BOLD + Colors.BLUE)}")
-    print(f"{colorize('═' * 70, Colors.BLUE)}")
+    print(f"\n{colorize('=' * 70, Colors.BLUE)}")
+    print(f"{colorize('[*] Extracting SQLite Databases', Colors.BOLD + Colors.BLUE)}")
+    print(f"{colorize('=' * 70, Colors.BLUE)}")
     db_results, all_queries, total_tables, total_rows = extract_databases(extractor, output_dir, logger)
 
     # Extract JSON artifacts
-    print(f"\n{colorize('═' * 70, Colors.BLUE)}")
-    print(f"{colorize('📄 Extracting JSON Artifacts', Colors.BOLD + Colors.BLUE)}")
-    print(f"{colorize('═' * 70, Colors.BLUE)}")
+    print(f"\n{colorize('=' * 70, Colors.BLUE)}")
+    print(f"{colorize('[*] Extracting JSON Artifacts', Colors.BOLD + Colors.BLUE)}")
+    print(f"{colorize('=' * 70, Colors.BLUE)}")
     json_data = extract_json_artifacts(extractor, output_dir, logger)
 
     # Extract credentials from all data
-    print(f"\n{colorize('═' * 70, Colors.MAGENTA)}")
-    print(f"{colorize('🔐 Analyzing for Credentials', Colors.BOLD + Colors.MAGENTA)}")
-    print(f"{colorize('═' * 70, Colors.MAGENTA)}")
+    print(f"\n{colorize('=' * 70, Colors.MAGENTA)}")
+    print(f"{colorize('[*] Analyzing for Credentials', Colors.BOLD + Colors.MAGENTA)}")
+    print(f"{colorize('=' * 70, Colors.MAGENTA)}")
     
     credentials = extract_credentials_from_data({}, all_queries, json_data)
     
@@ -602,9 +710,9 @@ def extract_profile(
     print_credentials_summary(credentials)
 
     # Decrypt saved passwords
-    print(f"\n{colorize('═' * 70, Colors.RED)}")
-    print(f"{colorize('🔓 Decrypting Saved Passwords', Colors.BOLD + Colors.RED)}")
-    print(f"{colorize('═' * 70, Colors.RED)}")
+    print(f"\n{colorize('=' * 70, Colors.RED)}")
+    print(f"{colorize('[*] Decrypting Saved Passwords', Colors.BOLD + Colors.RED)}")
+    print(f"{colorize('=' * 70, Colors.RED)}")
     
     decrypted_passwords = []
     
@@ -612,17 +720,17 @@ def extract_profile(
     try:
         validate_environment(profile_path)
     except UnsupportedEnvironment as e:
-        print(f"  {colorize('❌ UNSUPPORTED ENVIRONMENT', Colors.RED)}")
+        print(f"  {colorize('[!] UNSUPPORTED ENVIRONMENT', Colors.RED)}")
         print(f"  {colorize(str(e), Colors.YELLOW)}")
         error = str(e)
         passwords = []
     except NSSLibraryMissing as e:
-        print(f"  {colorize('❌ MISSING LIBRARY', Colors.RED)}")
+        print(f"  {colorize('[!] MISSING LIBRARY', Colors.RED)}")
         print(f"  {colorize(str(e), Colors.YELLOW)}")
         error = str(e)
         passwords = []
     except OSKeyringLocked as e:
-        print(f"  {colorize('❌ OS KEYRING LOCKED', Colors.RED)}")
+        print(f"  {colorize('[!] OS KEYRING LOCKED', Colors.RED)}")
         print(f"  {colorize(str(e), Colors.YELLOW)}")
         error = str(e)
         passwords = []
@@ -638,13 +746,13 @@ def extract_profile(
                 if master_password:
                     passwords, error = decrypt_firefox_passwords(profile_path, master_password)
                 else:
-                    print(f"  {colorize('⚠ Skipping password decryption (no master password provided)', Colors.YELLOW)}")
+                    print(f"  {colorize('[*] Skipping password decryption (no master password provided)', Colors.YELLOW)}")
                     error = None  # User chose to skip
             else:
-                print(f"  {colorize('⚠ Master password required but running non-interactively', Colors.YELLOW)}")
+                print(f"  {colorize('[*] Master password required but running non-interactively', Colors.YELLOW)}")
         
         if error:
-            print(f"  {colorize(f'⚠ Password decryption failed: {error}', Colors.YELLOW)}")
+            print(f"  {colorize(f'[*] Password decryption failed: {error}', Colors.YELLOW)}")
         elif passwords:
             decrypted_passwords = passwords
             print_decrypted_passwords(passwords)
@@ -686,9 +794,9 @@ def extract_profile(
     )
 
     # Generate reports in requested formats
-    print(f"\n{colorize('═' * 70, Colors.GREEN)}")
-    print(f"{colorize('📝 Generating Reports', Colors.BOLD + Colors.GREEN)}")
-    print(f"{colorize('═' * 70, Colors.GREEN)}")
+    print(f"\n{colorize('=' * 70, Colors.GREEN)}")
+    print(f"{colorize('[*] Generating Reports', Colors.BOLD + Colors.GREEN)}")
+    print(f"{colorize('=' * 70, Colors.GREEN)}")
     
     report_gen = ReportGenerator(forensic_data)
     
@@ -696,18 +804,18 @@ def extract_profile(
         html_path = output_dir / f"forensics_report.html"
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(report_gen.html_formatter.generate())
-        print(f"  {colorize('✓', Colors.GREEN)} HTML Report: {html_path}")
+        print(f"  {colorize('[+]', Colors.GREEN)} HTML Report: {html_path}")
     
     if 'md' in formats:
         md_path = output_dir / f"forensics_report.md"
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(report_gen.md_formatter.generate())
-        print(f"  {colorize('✓', Colors.GREEN)} Markdown Report: {md_path}")
+        print(f"  {colorize('[+]', Colors.GREEN)} Markdown Report: {md_path}")
     
     if 'csv' in formats:
         csv_dir = output_dir / "csv_export"
         csv_files = report_gen.csv_formatter.save_all(csv_dir)
-        print(f"  {colorize('✓', Colors.GREEN)} CSV Files: {len(csv_files)} files in {csv_dir}")
+        print(f"  {colorize('[+]', Colors.GREEN)} CSV Files: {len(csv_files)} files in {csv_dir}")
     
     # Generate master report (legacy format)
     master_report = ForensicReportGenerator.generate_master_report(
@@ -717,18 +825,18 @@ def extract_profile(
     master_report_path.write_text(master_report, encoding='utf-8')
 
     # Summary
-    print(f"\n{colorize('═' * 70, Colors.GREEN)}")
-    print(f"{colorize('✅ EXTRACTION COMPLETE', Colors.BOLD + Colors.GREEN)}")
-    print(f"{colorize('═' * 70, Colors.GREEN)}")
+    print(f"\n{colorize('=' * 70, Colors.GREEN)}")
+    print(f"{colorize('[+] EXTRACTION COMPLETE', Colors.BOLD + Colors.GREEN)}")
+    print(f"{colorize('=' * 70, Colors.GREEN)}")
     
     print(f"\n{colorize('Summary:', Colors.CYAN)}")
-    print(f"  • Databases processed: {colorize(str(summary['databases']), Colors.YELLOW)}")
-    print(f"  • Tables extracted: {colorize(str(summary['tables']), Colors.YELLOW)}")
+    print(f"  - Databases processed: {colorize(str(summary['databases']), Colors.YELLOW)}")
+    print(f"  - Tables extracted: {colorize(str(summary['tables']), Colors.YELLOW)}")
     total_rows_str = f"{summary['total_rows']:,}"
-    print(f"  • Total rows: {colorize(total_rows_str, Colors.YELLOW)}")
-    print(f"  • JSON artifacts: {colorize(str(summary['json_files']), Colors.YELLOW)}")
-    print(f"  • Credentials found: {colorize(str(summary['credentials']), Colors.RED + Colors.BOLD)}")
-    print(f"  • Passwords decrypted: {colorize(str(summary.get('decrypted_passwords', 0)), Colors.RED + Colors.BOLD)}")
+    print(f"  - Total rows: {colorize(total_rows_str, Colors.YELLOW)}")
+    print(f"  - JSON artifacts: {colorize(str(summary['json_files']), Colors.YELLOW)}")
+    print(f"  - Credentials found: {colorize(str(summary['credentials']), Colors.RED + Colors.BOLD)}")
+    print(f"  - Passwords decrypted: {colorize(str(summary.get('decrypted_passwords', 0)), Colors.RED + Colors.BOLD)}")
     
     print(f"\n{colorize('Output saved to:', Colors.CYAN)} {output_dir}")
     print(f"\n{colorize('Files created:', Colors.CYAN)}")
@@ -736,11 +844,11 @@ def extract_profile(
         subpath = output_dir / subdir
         if subpath.exists():
             file_count = len(list(subpath.rglob("*.*")))
-            print(f"  📁 {subdir}/: {file_count} files")
+            print(f"  [DIR] {subdir}/: {file_count} files")
     
     # List main reports
     for report_file in output_dir.glob("forensics_report.*"):
-        print(f"  📄 {report_file.name}")
+        print(f"  [FILE] {report_file.name}")
 
     print_goodbye()
     return True
@@ -784,10 +892,10 @@ def extract_profile_forensic(
     # Get profile info for display
     profile_info = get_profile_info(profile_path)
     
-    print(f"{colorize('📁 Profile:', Colors.CYAN)} {profile_info['name']}")
-    print(f"{colorize('📍 Path:', Colors.CYAN)} {profile_path}")
-    print(f"{colorize('💾 Size:', Colors.CYAN)} {profile_info.get('total_size_formatted', 'unknown')}")
-    print(f"{colorize('📄 Files:', Colors.CYAN)} {profile_info.get('file_count', 'unknown')}")
+    print(f"{colorize('Profile:', Colors.CYAN)} {profile_info['name']}")
+    print(f"{colorize('Path:', Colors.CYAN)} {profile_path}")
+    print(f"{colorize('Size:', Colors.CYAN)} {profile_info.get('total_size_formatted', 'unknown')}")
+    print(f"{colorize('Files:', Colors.CYAN)} {profile_info.get('file_count', 'unknown')}")
     print()
     
     # Interactive output path selection
@@ -800,15 +908,32 @@ def extract_profile_forensic(
             print_goodbye()
             return False
     
+    # Convert to Path object
+    output_dir = Path(output_dir)
+    
+    # Check for existing output files if directory exists
+    if interactive and output_dir.exists():
+        action = prompt_output_exists(output_dir)
+        
+        if action == 'cancel':
+            print(f"\n{colorize('Operation cancelled by user.', Colors.YELLOW)}")
+            print_goodbye()
+            return False
+        elif action == 'increment':
+            output_dir = get_incremental_output_dir(output_dir)
+            print(f"\n{colorize('[+]', Colors.GREEN)} Using new directory: {output_dir}")
+        elif action == 'overwrite':
+            print(f"\n{colorize('[+]', Colors.GREEN)} Will overwrite existing files in: {output_dir}")
+        # If action is None, no existing files, proceed normally
+    
     # Create output directory
     print(f"\n{colorize('Creating output directory:', Colors.CYAN)} {output_dir}")
-    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Initialize forensic report builder
-    print(f"\n{colorize('═' * 70, Colors.BLUE)}")
-    print(f"{colorize('🔬 Building Forensic Report', Colors.BOLD + Colors.BLUE)}")
-    print(f"{colorize('═' * 70, Colors.BLUE)}")
+    print(f"\n{colorize('=' * 70, Colors.BLUE)}")
+    print(f"{colorize('[*] Building Forensic Report', Colors.BOLD + Colors.BLUE)}")
+    print(f"{colorize('=' * 70, Colors.BLUE)}")
     
     execution_args = sys.argv[1:] if len(sys.argv) > 1 else []
     
@@ -821,24 +946,24 @@ def extract_profile_forensic(
         )
         
         # Collect evidence files
-        print(f"  {colorize('•', Colors.CYAN)} Collecting evidence integrity data...")
+        print(f"  {colorize('-', Colors.CYAN)} Collecting evidence integrity data...")
         evidence_files = builder.evidence_manager.collect_evidence_files(copy_artifacts)
-        print(f"    {colorize('✓', Colors.GREEN)} {len(evidence_files)} files catalogued")
+        print(f"    {colorize('[+]', Colors.GREEN)} {len(evidence_files)} files catalogued")
         
         # Extract databases
-        print(f"  {colorize('•', Colors.CYAN)} Extracting SQLite databases...")
+        print(f"  {colorize('-', Colors.CYAN)} Extracting SQLite databases...")
         builder._extract_all_databases()
         db_count = len([f for f in builder.findings.keys() if not f.startswith('logins')])
-        print(f"    {colorize('✓', Colors.GREEN)} {db_count} data categories extracted")
+        print(f"    {colorize('[+]', Colors.GREEN)} {db_count} data categories extracted")
         
         # Extract JSON artifacts
-        print(f"  {colorize('•', Colors.CYAN)} Processing JSON artifacts...")
+        print(f"  {colorize('-', Colors.CYAN)} Processing JSON artifacts...")
         builder._extract_json_artifacts()
         
         # Attempt password decryption
-        print(f"\n{colorize('═' * 70, Colors.RED)}")
-        print(f"{colorize('🔓 Attempting Password Decryption', Colors.BOLD + Colors.RED)}")
-        print(f"{colorize('═' * 70, Colors.RED)}")
+        print(f"\n{colorize('=' * 70, Colors.RED)}")
+        print(f"{colorize('[*] Attempting Password Decryption', Colors.BOLD + Colors.RED)}")
+        print(f"{colorize('=' * 70, Colors.RED)}")
         
         decrypted_passwords = []
         
@@ -858,16 +983,16 @@ def extract_profile_forensic(
                             decrypted_passwords = passwords
                             print_decrypted_passwords(passwords)
                     else:
-                        print(f"  {colorize('⚠ Skipping password decryption', Colors.YELLOW)}")
+                        print(f"  {colorize('[*] Skipping password decryption', Colors.YELLOW)}")
                         builder.decryption_context.master_password_status = "set"
                         builder.decryption_context.decryption_status = ProcessingStatus.PARTIAL
                         builder.decryption_context.failure_reason = "Master password required but not provided"
                 else:
-                    print(f"  {colorize('⚠ Master password required but running non-interactively', Colors.YELLOW)}")
+                    print(f"  {colorize('[*] Master password required but running non-interactively', Colors.YELLOW)}")
                     builder.decryption_context.master_password_status = "set"
                     builder.decryption_context.decryption_status = ProcessingStatus.PARTIAL
             elif error:
-                print(f"  {colorize(f'⚠ Decryption failed: {error}', Colors.YELLOW)}")
+                print(f"  {colorize(f'[*] Decryption failed: {error}', Colors.YELLOW)}")
                 builder.decryption_context.decryption_status = ProcessingStatus.FAILED
                 builder.decryption_context.failure_reason = error
             elif passwords:
@@ -875,29 +1000,29 @@ def extract_profile_forensic(
                 decrypted_passwords = passwords
                 print_decrypted_passwords(passwords)
             else:
-                print(f"  {colorize('ℹ No saved passwords found', Colors.YELLOW)}")
+                print(f"  {colorize('[*] No saved passwords found', Colors.YELLOW)}")
                 builder.decryption_context.decryption_status = ProcessingStatus.SUCCESS
                 
         except UnsupportedEnvironment as e:
-            print(f"  {colorize('❌ UNSUPPORTED ENVIRONMENT', Colors.RED)}")
+            print(f"  {colorize('[!] UNSUPPORTED ENVIRONMENT', Colors.RED)}")
             print(f"  {colorize(str(e), Colors.YELLOW)}")
             builder.decryption_context.decryption_status = ProcessingStatus.FAILED
             builder.decryption_context.failure_reason = str(e)
         except NSSLibraryMissing as e:
-            print(f"  {colorize('❌ MISSING LIBRARY', Colors.RED)}")
+            print(f"  {colorize('[!] MISSING LIBRARY', Colors.RED)}")
             print(f"  {colorize(str(e), Colors.YELLOW)}")
             builder.decryption_context.decryption_status = ProcessingStatus.FAILED
             builder.decryption_context.failure_reason = str(e)
         except OSKeyringLocked as e:
-            print(f"  {colorize('❌ OS KEYRING LOCKED', Colors.RED)}")
+            print(f"  {colorize('[!] OS KEYRING LOCKED', Colors.RED)}")
             print(f"  {colorize(str(e), Colors.YELLOW)}")
             builder.decryption_context.decryption_status = ProcessingStatus.FAILED
             builder.decryption_context.failure_reason = str(e)
         
         # Build final report
-        print(f"\n{colorize('═' * 70, Colors.GREEN)}")
-        print(f"{colorize('📝 Generating Forensic Reports', Colors.BOLD + Colors.GREEN)}")
-        print(f"{colorize('═' * 70, Colors.GREEN)}")
+        print(f"\n{colorize('=' * 70, Colors.GREEN)}")
+        print(f"{colorize('[*] Generating Forensic Reports', Colors.BOLD + Colors.GREEN)}")
+        print(f"{colorize('=' * 70, Colors.GREEN)}")
         
         # Build report object
         report = builder.build()
@@ -908,19 +1033,19 @@ def extract_profile_forensic(
         
         # Report generated files
         for fmt, path in outputs.items():
-            print(f"  {colorize('✓', Colors.GREEN)} {fmt.upper()}: {path}")
+            print(f"  {colorize('[+]', Colors.GREEN)} {fmt.upper()}: {path}")
         
         # Copy artifacts if requested
         if copy_artifacts:
             artifacts_dir = output_dir / "artifacts"
             if artifacts_dir.exists():
                 artifact_count = len(list(artifacts_dir.glob('*')))
-                print(f"  {colorize('✓', Colors.GREEN)} Artifacts: {artifact_count} files copied to {artifacts_dir}")
+                print(f"  {colorize('[+]', Colors.GREEN)} Artifacts: {artifact_count} files copied to {artifacts_dir}")
         
         # Summary
-        print(f"\n{colorize('═' * 70, Colors.GREEN)}")
-        print(f"{colorize('✅ FORENSIC EXTRACTION COMPLETE', Colors.BOLD + Colors.GREEN)}")
-        print(f"{colorize('═' * 70, Colors.GREEN)}")
+        print(f"\n{colorize('=' * 70, Colors.GREEN)}")
+        print(f"{colorize('[+] FORENSIC EXTRACTION COMPLETE', Colors.BOLD + Colors.GREEN)}")
+        print(f"{colorize('=' * 70, Colors.GREEN)}")
         
         # Statistics
         total_items = sum(cat.total_count for cat in report.findings.values())
@@ -928,27 +1053,27 @@ def extract_profile_forensic(
         warnings = len([e for e in report.errors_and_warnings if e.status == ProcessingStatus.PARTIAL])
         
         print(f"\n{colorize('Statistics:', Colors.CYAN)}")
-        print(f"  • Evidence files catalogued: {colorize(str(len(evidence_files)), Colors.YELLOW)}")
-        print(f"  • Data categories extracted: {colorize(str(len(report.findings)), Colors.YELLOW)}")
-        print(f"  • Total items extracted: {colorize(f'{total_items:,}', Colors.YELLOW)}")
-        print(f"  • Passwords decrypted: {colorize(str(len(decrypted_passwords)), Colors.RED + Colors.BOLD)}")
-        print(f"  • Errors: {colorize(str(errors), Colors.RED if errors else Colors.GREEN)}")
-        print(f"  • Warnings: {colorize(str(warnings), Colors.YELLOW if warnings else Colors.GREEN)}")
+        print(f"  - Evidence files catalogued: {colorize(str(len(evidence_files)), Colors.YELLOW)}")
+        print(f"  - Data categories extracted: {colorize(str(len(report.findings)), Colors.YELLOW)}")
+        print(f"  - Total items extracted: {colorize(f'{total_items:,}', Colors.YELLOW)}")
+        print(f"  - Passwords decrypted: {colorize(str(len(decrypted_passwords)), Colors.RED + Colors.BOLD)}")
+        print(f"  - Errors: {colorize(str(errors), Colors.RED if errors else Colors.GREEN)}")
+        print(f"  - Warnings: {colorize(str(warnings), Colors.YELLOW if warnings else Colors.GREEN)}")
         
         print(f"\n{colorize('Output Directory:', Colors.CYAN)} {output_dir}")
         print(f"\n{colorize('Generated Files:', Colors.CYAN)}")
-        print(f"  📄 report.html    - Human-readable forensic report")
-        print(f"  📄 report.json    - Machine-readable structured data")
-        print(f"  📄 summary.txt    - Executive summary")
+        print(f"  [FILE] report.html    - Human-readable forensic report")
+        print(f"  [FILE] report.json    - Machine-readable structured data")
+        print(f"  [FILE] summary.txt    - Executive summary")
         if copy_artifacts and artifacts_dir.exists():
-            print(f"  📁 artifacts/     - Copied read-only source files")
+            print(f"  [DIR]  artifacts/     - Copied read-only source files")
         
         print_goodbye()
         return True
         
     except Exception as e:
         logger.exception(f"Forensic extraction failed: {e}")
-        print(f"\n{colorize(f'❌ Extraction failed: {e}', Colors.RED)}")
+        print(f"\n{colorize(f'[!] Extraction failed: {e}', Colors.RED)}")
         print_goodbye()
         return False
 
@@ -1047,7 +1172,7 @@ def main():
         for db_name, queries in QUERY_REGISTRY.items():
             print(f"{colorize(db_name, Colors.YELLOW)}:")
             for query_name in queries:
-                print(f"  • {query_name}")
+                print(f"  - {query_name}")
             print()
         return 0
 
