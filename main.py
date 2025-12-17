@@ -77,6 +77,7 @@ from browser_profiles import (
 )
 from extractors import FirefoxExtractor, ChromiumExtractor
 from sql_queries import FIREFOX_QUERIES, CHROMIUM_QUERIES
+from html_report import generate_html_report
 
 
 def setup_logging(log_level: int = logging.INFO) -> logging.Logger:
@@ -88,6 +89,162 @@ def setup_logging(log_level: int = logging.INFO) -> logging.Logger:
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(handler)
     return logger
+
+
+def generate_summary_txt(
+    browser_name: str,
+    profile_path: Path,
+    all_data: Dict,
+    output_path: Path,
+    decryption_success: bool = False,
+    has_master_password: bool = False,
+) -> None:
+    """Generate a professional executive summary text file."""
+    import platform
+    import hashlib
+    import getpass
+    
+    line_width = 78
+    separator = "=" * line_width
+    thin_sep = "-" * line_width
+    
+    # Calculate totals
+    total_records = sum(len(v) for v in all_data.values() if isinstance(v, list))
+    passwords_count = len(all_data.get('passwords', []))
+    cookies_count = len(all_data.get('cookies', []))
+    history_count = len(all_data.get('history', []))
+    
+    # Get profile size
+    profile_size = 0
+    files_analyzed = 0
+    file_hashes = []
+    
+    if profile_path.exists():
+        db_files = ['places.sqlite', 'cookies.sqlite', 'formhistory.sqlite', 
+                    'permissions.sqlite', 'webappsstore.sqlite', 'favicons.sqlite',
+                    'content-prefs.sqlite', 'storage.sqlite', 'logins.json', 'key4.db',
+                    'Login Data', 'Cookies', 'History', 'Web Data', 'Bookmarks']
+        
+        for f in profile_path.iterdir():
+            if f.is_file():
+                try:
+                    fsize = f.stat().st_size
+                    profile_size += fsize
+                    if f.name in db_files or f.suffix in ['.sqlite', '.db', '.json']:
+                        files_analyzed += 1
+                        # Calculate hash for important files
+                        if f.name in db_files[:10]:  # First 10 files
+                            try:
+                                with open(f, 'rb') as hf:
+                                    h = hashlib.sha256(hf.read(8192)).hexdigest()[:16]
+                                    file_hashes.append((f.name, h))
+                            except:
+                                pass
+                except:
+                    pass
+    
+    # Format size
+    if profile_size > 1024 * 1024:
+        size_str = f"{profile_size / (1024 * 1024):.2f} MB"
+    elif profile_size > 1024:
+        size_str = f"{profile_size / 1024:.2f} KB"
+    else:
+        size_str = f"{profile_size} bytes"
+    
+    # System info
+    system_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
+    analyst = getpass.getuser()
+    utc_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    lines = []
+    lines.append(separator)
+    lines.append(f"{browser_name.upper()} FORENSICS EXTRACTION - EXECUTIVE SUMMARY")
+    lines.append(separator)
+    lines.append("")
+    lines.append("NOTICE: Read-only analysis | Local execution | Forensic/personal use only")
+    lines.append(thin_sep)
+    lines.append("")
+    
+    # Case Information
+    lines.append("CASE INFORMATION")
+    lines.append("-" * 40)
+    lines.append(f"  Date (UTC):     {utc_time}")
+    lines.append(f"  Analyst:        {analyst}")
+    lines.append(f"  Host System:    {system_info}")
+    lines.append(f"  Tool Version:   1.0.0")
+    lines.append("")
+    
+    # Acquisition Overview
+    lines.append("ACQUISITION OVERVIEW")
+    lines.append("-" * 40)
+    lines.append(f"  Browser:           {browser_name}")
+    lines.append(f"  Profile Path:      {profile_path}")
+    lines.append(f"  Files Analyzed:    {files_analyzed}")
+    lines.append(f"  Access Mode:       read-only")
+    lines.append(f"  Total Data Size:   {size_str}")
+    lines.append("")
+    
+    # Decryption Status
+    lines.append("DECRYPTION STATUS")
+    lines.append("-" * 40)
+    if browser_name.lower() == 'firefox':
+        lines.append(f"  Master Password:   {'Set' if has_master_password else 'Not Set'}")
+    else:
+        lines.append(f"  Encryption:        {'DPAPI/AES-GCM' if 'chrome' in browser_name.lower() or 'chromium' in browser_name.lower() or 'edge' in browser_name.lower() else 'Platform Key'}")
+    lines.append(f"  Decryption:        {'SUCCESS' if decryption_success else 'NOT ATTEMPTED' if passwords_count == 0 else 'FAILED'}")
+    lines.append("")
+    
+    # Findings Summary
+    lines.append("FINDINGS SUMMARY")
+    lines.append("-" * 40)
+    lines.append(f"  {'Category':<36} {'Count':>8}    Status")
+    lines.append("  " + "-" * 54)
+    
+    # Sort by count descending
+    sorted_data = sorted(
+        [(k, v) for k, v in all_data.items() if isinstance(v, list)],
+        key=lambda x: len(x[1]),
+        reverse=True
+    )
+    
+    for name, data in sorted_data:
+        count = len(data)
+        display_name = name.replace('_', ' ').title()
+        status = "SUCCESS" if count >= 0 else "FAILED"
+        lines.append(f"  {display_name:<36} {count:>8}    {status}")
+    
+    lines.append("  " + "-" * 54)
+    lines.append(f"  {'TOTAL':<36} {total_records:>8}")
+    lines.append("")
+    
+    # Key Findings
+    lines.append("KEY FINDINGS HIGHLIGHT")
+    lines.append("-" * 40)
+    lines.append(f"  Saved Passwords Found:     {passwords_count}")
+    lines.append(f"  Cookies Extracted:         {cookies_count}")
+    lines.append(f"  History Entries:           {history_count}")
+    lines.append("")
+    
+    # Evidence Integrity
+    if file_hashes:
+        lines.append("EVIDENCE INTEGRITY")
+        lines.append("-" * 40)
+        lines.append(f"  {'File':<32} SHA256 (first 16 chars)")
+        lines.append("  " + "-" * 54)
+        for fname, fhash in file_hashes[:10]:
+            lines.append(f"  {fname:<32} {fhash}...")
+        if len(file_hashes) > 10:
+            lines.append(f"  ... and {len(file_hashes) - 10} more files")
+        lines.append("")
+    
+    # Footer
+    lines.append(separator)
+    lines.append("END OF EXECUTIVE SUMMARY")
+    lines.append(f"Full details available in: report.html")
+    lines.append(separator)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
 
 
 # =============================================================================
@@ -418,6 +575,8 @@ def extract_firefox(
                 print_autofill(data)
 
     # Decrypt passwords
+    decryption_success = False
+    has_master_password = False
     if not skip_passwords and (extract_all or 'passwords' in categories):
         print(f"\n{colorize('[*] Attempting password decryption...', Colors.CYAN)}")
         try:
@@ -427,6 +586,7 @@ def extract_firefox(
             passwords, error = decrypt_firefox_passwords(profile_path, "")
             
             if error and "master password" in error.lower():
+                has_master_password = True
                 import getpass
                 pwd = getpass.getpass(f"{colorize('Enter master password: ', Colors.YELLOW)}")
                 if pwd:
@@ -434,6 +594,7 @@ def extract_firefox(
             
             if passwords:
                 all_data['passwords'] = passwords
+                decryption_success = True
                 print(f"  {colorize('✓', Colors.GREEN)} Passwords: {len(passwords)} decrypted")
                 print_passwords_firefox(passwords)
             elif error:
@@ -449,8 +610,8 @@ def extract_firefox(
 
     # Save to files
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_dir = output_dir / "csv"
-    csv_dir.mkdir(exist_ok=True)
+    artifacts_dir = output_dir / "artifacts"
+    artifacts_dir.mkdir(exist_ok=True)
 
     print(f"\n{colorize('[*] Saving reports...', Colors.CYAN)}")
     
@@ -458,25 +619,26 @@ def extract_firefox(
         if name == 'passwords':
             continue  # Don't save passwords to CSV
         if data and isinstance(data, list) and isinstance(data[0], dict):
-            csv_path = csv_dir / f"{name}.csv"
+            csv_path = artifacts_dir / f"{name}.csv"
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=data[0].keys())
                 writer.writeheader()
                 writer.writerows(data)
-            print(f"  {colorize('✓', Colors.GREEN)} {csv_path.name}")
+            print(f"  {colorize('✓', Colors.GREEN)} artifacts/{csv_path.name}")
 
     # Summary
-    summary_path = output_dir / "summary.txt"
-    with open(summary_path, 'w') as f:
-        f.write(f"Firefox Forensics Extraction\n{'=' * 40}\n\n")
-        f.write(f"Profile: {profile_path}\n")
-        f.write(f"Time: {datetime.now().isoformat()}\n\n")
-        f.write("Extracted Data:\n")
-        for name, data in all_data.items():
-            count = len(data) if isinstance(data, list) else 1
-            f.write(f"  {name}: {count} records\n")
+    summary_path = artifacts_dir / "summary.txt"
+    generate_summary_txt(
+        "Firefox", profile_path, all_data, summary_path,
+        decryption_success=decryption_success,
+        has_master_password=has_master_password
+    )
+    print(f"  {colorize('✓', Colors.GREEN)} artifacts/summary.txt")
 
-    print(f"  {colorize('✓', Colors.GREEN)} summary.txt")
+    # Generate HTML report
+    html_path = output_dir / "report.html"
+    generate_html_report("Firefox", profile_path, all_data, html_path)
+    print(f"  {colorize('✓', Colors.GREEN)} report.html")
 
     print(f"\n{colorize('=' * 60, Colors.GREEN)}")
     print(f"{colorize('Extraction Complete!', Colors.GREEN)}")
@@ -561,6 +723,7 @@ def extract_chromium(
                 print(f"  {colorize('✓', Colors.GREEN)} Extensions: {len(data)}")
 
     # Decrypt passwords
+    decryption_success = False
     if not skip_passwords and (extract_all or 'passwords' in categories):
         print(f"\n{colorize('[*] Attempting password decryption...', Colors.CYAN)}")
         try:
@@ -573,6 +736,7 @@ def extract_chromium(
                 credentials, errors = decrypt_chromium_passwords(profile.profile_path, profile.user_data_dir)
                 if credentials:
                     all_data['passwords'] = credentials
+                    decryption_success = True
                     print(f"  {colorize('✓', Colors.GREEN)} Passwords: {len(credentials)} decrypted")
                     print_passwords_chromium(credentials)
                 elif errors:
@@ -588,8 +752,8 @@ def extract_chromium(
 
     # Save to files
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_dir = output_dir / "csv"
-    csv_dir.mkdir(exist_ok=True)
+    artifacts_dir = output_dir / "artifacts"
+    artifacts_dir.mkdir(exist_ok=True)
 
     print(f"\n{colorize('[*] Saving reports...', Colors.CYAN)}")
     
@@ -597,25 +761,26 @@ def extract_chromium(
         if name == 'passwords':
             continue
         if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            csv_path = csv_dir / f"{name}.csv"
+            csv_path = artifacts_dir / f"{name}.csv"
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=data[0].keys())
                 writer.writeheader()
                 writer.writerows(data)
-            print(f"  {colorize('✓', Colors.GREEN)} {csv_path.name}")
+            print(f"  {colorize('✓', Colors.GREEN)} artifacts/{csv_path.name}")
 
     # Summary
-    summary_path = output_dir / "summary.txt"
-    with open(summary_path, 'w') as f:
-        f.write(f"{browser_name} Forensics Extraction\n{'=' * 40}\n\n")
-        f.write(f"Profile: {profile.profile_path}\n")
-        f.write(f"Time: {datetime.now().isoformat()}\n\n")
-        f.write("Extracted Data:\n")
-        for name, data in all_data.items():
-            count = len(data) if isinstance(data, list) else 1
-            f.write(f"  {name}: {count} records\n")
+    summary_path = artifacts_dir / "summary.txt"
+    generate_summary_txt(
+        browser_name, profile.profile_path, all_data, summary_path,
+        decryption_success=decryption_success,
+        has_master_password=False
+    )
+    print(f"  {colorize('✓', Colors.GREEN)} artifacts/summary.txt")
 
-    print(f"  {colorize('✓', Colors.GREEN)} summary.txt")
+    # Generate HTML report
+    html_path = output_dir / "report.html"
+    generate_html_report(browser_name, profile.profile_path, all_data, html_path)
+    print(f"  {colorize('✓', Colors.GREEN)} report.html")
 
     print(f"\n{colorize('=' * 60, Colors.GREEN)}")
     print(f"{colorize('Extraction Complete!', Colors.GREEN)}")
@@ -731,11 +896,12 @@ def main():
 
     # Determine output directory
     browser_name = selected_profile.browser_type.value.lower()
+    profile_name = selected_profile.profile_name.replace(' ', '_').replace('/', '_')
     if args.output:
         output_dir = Path(args.output)
     else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path.home() / "Downloads" / f"{browser_name}_forensics_{timestamp}"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        output_dir = Path.home() / "Downloads" / f"{browser_name}_{timestamp}_{profile_name}"
 
     # Run extraction
     try:
