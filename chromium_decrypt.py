@@ -35,6 +35,19 @@ from typing import List, Optional, Tuple, Dict, Any
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
+    import ctypes.wintypes
+
+# Browser-specific App-Bound Encryption (v20) IIDs for Windows
+BROWSER_ELEVATOR_IIDS = {
+    "chrome": "{708860E0-F641-4611-8895-7D867DD3675B}",
+    "chrome_beta": "{DD2646BA-3707-4BF8-B9A7-038691A68FC2}",
+    "chrome_canary": "{4C3CB658-3EC9-4E25-B114-C523E2339D92}",
+    "chrome_dev": "{AA67F288-48D1-461B-B16A-C5FD8A38EDE1}",
+    "edge": "{1FCBE96C-1697-43AF-9140-2897C7C69767}",
+    "brave": "{576B31AF-6369-4B6B-8560-E4B203A97A8B}",
+    "opera": "{68B95A67-C7CA-4926-964F-0459D8C4891A}",
+    "vivaldi": "{8B1D5A2F-2FDD-4E98-87FB-DEE7E69F2E19}",
+}
 
 
 @dataclass
@@ -134,6 +147,56 @@ if sys.platform == "win32":
         kernel32.LocalFree(output_blob.pbData)
         
         return decrypted
+
+    def _win_get_app_bound_key(browser_name: str, user_data_dir: Path) -> Optional[bytes]:
+        """Get the App-Bound Encryption key for v20 passwords on Windows.
+        
+        Chrome 127+ uses Application-Bound Encryption (ABE) which stores an 
+        additional encrypted key in Local State under os_crypt.app_bound_encrypted_key.
+        This key is decrypted using DPAPI with additional system-level protection.
+        
+        Args:
+            browser_name: Name of the browser (chrome, edge, brave, etc.)
+            user_data_dir: Path to browser's User Data directory
+        
+        Returns:
+            32-byte AES key for v20 decryption, or None if not available
+        """
+        local_state_path = user_data_dir / "Local State"
+        if not local_state_path.exists():
+            return None
+        
+        try:
+            with open(local_state_path, "r", encoding="utf-8") as f:
+                local_state = json.load(f)
+            
+            # Try to get app_bound_encrypted_key
+            app_bound_key_b64 = local_state.get("os_crypt", {}).get("app_bound_encrypted_key")
+            if not app_bound_key_b64:
+                return None
+            
+            app_bound_key = base64.b64decode(app_bound_key_b64)
+            
+            # The app_bound_encrypted_key has format: "APPB" + DPAPI encrypted data
+            if app_bound_key[:4] != b"APPB":
+                return None
+            
+            # Decrypt the outer DPAPI layer
+            try:
+                decrypted_key = _win_dpapi_decrypt(app_bound_key[4:])
+            except DecryptionFailed:
+                return None
+            
+            # The decrypted data contains the actual AES key
+            # Format varies but typically the last 32 bytes are the key
+            if len(decrypted_key) >= 32:
+                return decrypted_key[-32:]
+            
+            return None
+            
+        except (json.JSONDecodeError, IOError, KeyError):
+            return None
+
 
 
 # =============================================================================
@@ -238,6 +301,53 @@ def get_encryption_key_windows(user_data_dir: Path) -> bytes:
     
     # Decrypt with DPAPI
     return _win_dpapi_decrypt(encrypted_key)
+
+
+def get_app_bound_key_windows(user_data_dir: Path, browser_name: str = "chrome") -> Optional[bytes]:
+    """Extract the App-Bound Encryption key for v20 passwords on Windows.
+    
+    Chrome 127+ introduced Application-Bound Encryption (ABE) which uses
+    a separate key stored in os_crypt.app_bound_encrypted_key.
+    
+    Args:
+        user_data_dir: Path to browser's User Data directory
+        browser_name: Browser name for IID lookup
+    
+    Returns:
+        32-byte AES key for v20 decryption, or None if not available
+    """
+    local_state_path = user_data_dir / "Local State"
+    if not local_state_path.exists():
+        return None
+    
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            local_state = json.load(f)
+        
+        # Get app_bound_encrypted_key
+        app_bound_key_b64 = local_state.get("os_crypt", {}).get("app_bound_encrypted_key")
+        if not app_bound_key_b64:
+            return None
+        
+        app_bound_key = base64.b64decode(app_bound_key_b64)
+        
+        # The key has format: "APPB" (4 bytes) + encrypted data
+        if len(app_bound_key) < 4 or app_bound_key[:4] != b"APPB":
+            return None
+        
+        # Decrypt using DPAPI
+        try:
+            decrypted = _win_dpapi_decrypt(app_bound_key[4:])
+            # The decrypted data should be 32 bytes (the AES-256 key)
+            if len(decrypted) >= 32:
+                return decrypted[-32:]
+            return decrypted
+        except DecryptionFailed:
+            # ABE key may require elevation or specific app context
+            return None
+            
+    except (json.JSONDecodeError, IOError, KeyError):
+        return None
 
 
 def get_encryption_key_linux(user_data_dir: Path) -> bytes:
@@ -384,20 +494,50 @@ def get_encryption_key(user_data_dir: Path) -> bytes:
 # Password Decryption Functions
 # =============================================================================
 
-def decrypt_password_windows(encrypted_password: bytes, key: bytes) -> str:
+class V20EncryptionError(DecryptionFailed):
+    """Special exception for v20 App-Bound Encryption that cannot be decrypted."""
+    pass
+
+
+def decrypt_password_windows(encrypted_password: bytes, key: bytes, app_bound_key: bytes = None) -> str:
     """Decrypt a Chromium password on Windows.
     
-    Handles both v10 (AES-GCM) and legacy (DPAPI) formats.
+    Handles v10 (AES-GCM), v20 (App-Bound Encryption), and legacy (DPAPI) formats.
     
     Args:
         encrypted_password: Encrypted password bytes
-        key: AES decryption key
+        key: AES decryption key (v10)
+        app_bound_key: App-Bound Encryption key for v20 (optional)
     
     Returns:
         Decrypted password string
+        
+    Raises:
+        V20EncryptionError: If v20 encryption is used (Chrome 127+)
+        DecryptionFailed: For other decryption failures
     """
     if not encrypted_password:
         return ""
+    
+    # v20 format: "v20" + nonce (12 bytes) + ciphertext + tag (16 bytes)
+    # Application-Bound Encryption (Chrome 127+ / July 2024)
+    # This encryption binds the key to the browser's code-signing certificate
+    # and cannot be decrypted outside the browser's process context.
+    if encrypted_password[:3] == b"v20":
+        if app_bound_key:
+            try:
+                return _aes_gcm_decrypt(encrypted_password[3:], app_bound_key).decode("utf-8")
+            except Exception:
+                pass
+        
+        # Try with regular v10 key as fallback (won't work but try anyway)
+        try:
+            return _aes_gcm_decrypt(encrypted_password[3:], key).decode("utf-8")
+        except Exception:
+            raise V20EncryptionError(
+                "v20 App-Bound Encryption (Chrome 127+) - "
+                "Use browser's Settings > Passwords > Export"
+            )
     
     # v10 format: "v10" + nonce + ciphertext + tag
     if encrypted_password[:3] == b"v10":
@@ -462,18 +602,19 @@ def decrypt_password_macos(encrypted_password: bytes, key: bytes) -> str:
     return encrypted_password.decode("utf-8", errors="ignore")
 
 
-def decrypt_password(encrypted_password: bytes, key: bytes) -> str:
+def decrypt_password(encrypted_password: bytes, key: bytes, app_bound_key: bytes = None) -> str:
     """Decrypt a password using the appropriate method for this platform.
     
     Args:
         encrypted_password: Encrypted password bytes from database
         key: Decryption key
+        app_bound_key: App-Bound Encryption key for v20 (Windows only)
     
     Returns:
         Decrypted password string
     """
     if sys.platform == "win32":
-        return decrypt_password_windows(encrypted_password, key)
+        return decrypt_password_windows(encrypted_password, key, app_bound_key)
     elif sys.platform == "darwin":
         return decrypt_password_macos(encrypted_password, key)
     else:
@@ -487,7 +628,8 @@ def decrypt_password(encrypted_password: bytes, key: bytes) -> str:
 def decrypt_chromium_passwords(
     profile_path: Path,
     user_data_dir: Path,
-    master_password: Optional[str] = None
+    master_password: Optional[str] = None,
+    browser_name: str = "chrome"
 ) -> Tuple[List[DecryptedCredential], List[str]]:
     """Decrypt all saved passwords from a Chromium profile.
     
@@ -495,6 +637,7 @@ def decrypt_chromium_passwords(
         profile_path: Path to browser profile directory
         user_data_dir: Path to User Data directory (contains Local State)
         master_password: Not used for Chromium (kept for API compatibility)
+        browser_name: Browser name (chrome, edge, brave, etc.) for v20 key
     
     Returns:
         Tuple of (list of DecryptedCredential, list of error messages)
@@ -513,6 +656,11 @@ def decrypt_chromium_passwords(
     except (EncryptionKeyNotFound, DependencyMissing) as e:
         errors.append(str(e))
         return credentials, errors
+    
+    # Try to get App-Bound Encryption key for v20 passwords (Windows only)
+    app_bound_key = None
+    if sys.platform == "win32":
+        app_bound_key = get_app_bound_key_windows(user_data_dir, browser_name)
     
     # Copy database to temp location (it may be locked)
     temp_dir = Path(tempfile.mkdtemp(prefix="chromium_passwords_"))
@@ -544,6 +692,7 @@ def decrypt_chromium_passwords(
             FROM logins
             WHERE blacklisted_by_user = 0
         """)
+        v20_count = 0  # Track v20 encrypted passwords
         
         for row in cursor.fetchall():
             origin_url = row[0] or ""
@@ -557,7 +706,10 @@ def decrypt_chromium_passwords(
             
             # Decrypt password
             try:
-                password = decrypt_password(encrypted_password, key) if encrypted_password else ""
+                password = decrypt_password(encrypted_password, key, app_bound_key) if encrypted_password else ""
+            except V20EncryptionError:
+                v20_count += 1
+                password = "[v20 PROTECTED - Use browser export]"
             except DecryptionFailed as e:
                 errors.append(f"Failed to decrypt password for {origin_url}: {e}")
                 password = "[DECRYPTION FAILED]"
@@ -595,6 +747,14 @@ def decrypt_chromium_passwords(
             ))
         
         conn.close()
+        
+        # Add warning about v20 encrypted passwords
+        if v20_count > 0:
+            errors.insert(0, 
+                f"{v20_count} password(s) use Chrome 127+ App-Bound Encryption (v20). "
+                f"These require the browser's export feature to decrypt. "
+                f"Go to: Settings > Passwords > Export Passwords"
+            )
         
     except sqlite3.Error as e:
         errors.append(f"Database error: {e}")
