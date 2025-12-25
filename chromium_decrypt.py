@@ -98,7 +98,17 @@ if IS_LINUX:
         try:
             import secretstorage
             
-            # Browser-specific identifiers
+            # Browser-specific Safe Storage labels (actual format used by browsers)
+            browser_safe_storage = {
+                "chrome": "Chrome Safe Storage",
+                "chromium": "Chromium Safe Storage", 
+                "brave": "Brave Safe Storage",
+                "edge": "Microsoft Edge Safe Storage",
+                "opera": "Opera Safe Storage",
+                "vivaldi": "Vivaldi Safe Storage",
+            }
+            
+            # Also try libsecret v2 schema names (older format)
             browser_schemas = {
                 "chrome": "chrome_libsecret_os_crypt_password_v2",
                 "chromium": "chromium_libsecret_os_crypt_password_v2", 
@@ -108,19 +118,26 @@ if IS_LINUX:
                 "vivaldi": "vivaldi_libsecret_os_crypt_password_v2",
             }
             
+            safe_storage_label = browser_safe_storage.get(browser.lower(), f"{browser.title()} Safe Storage")
             schema_name = browser_schemas.get(browser.lower(), "chrome_libsecret_os_crypt_password_v2")
             
             bus = secretstorage.dbus_init()
             collection = secretstorage.get_default_collection(bus)
             
+            # First try: exact Safe Storage label match
+            for item in collection.get_all_items():
+                if item.get_label() == safe_storage_label:
+                    return item.get_secret()
+            
+            # Second try: libsecret schema name
             for item in collection.get_all_items():
                 if item.get_label() == schema_name:
                     return item.get_secret()
             
-            # Fallback: try generic Chrome Safe Storage
+            # Fallback: fuzzy match on browser name + safe storage
             for item in collection.get_all_items():
                 label = item.get_label().lower()
-                if browser.lower() in label and ("safe" in label or "password" in label):
+                if browser.lower() in label and "safe storage" in label:
                     return item.get_secret()
                     
         except ImportError:
@@ -136,9 +153,19 @@ if IS_LINUX:
         return pbkdf2_hmac("sha1", password, b"saltysalt", 1, 16)
 
     LINUX_DEFAULT_PASSWORD = b"peanuts"
+    LINUX_DEFAULT_IV = b" " * 16  # 16 spaces (0x20)
 
     def _linux_aes_cbc_decrypt(encrypted_data: bytes, key: bytes) -> bytes:
-        """AES-128-CBC decrypt. Format: IV(16) + ciphertext"""
+        """AES-128-CBC decrypt for Linux Chromium.
+        
+        Linux Chromium uses a fixed IV of 16 spaces (0x20).
+        
+        For data > 32 bytes, Chromium prepends 32 bytes of encrypted random data
+        (16-byte random IV + 16-byte encrypted padding). After decryption, the first
+        32 bytes need to be skipped to get the actual plaintext.
+        
+        For data <= 16 bytes (single AES block), decryption works directly.
+        """
         try:
             from Crypto.Cipher import AES
             from Crypto.Util.Padding import unpad
@@ -148,11 +175,14 @@ if IS_LINUX:
                 "Install with: pip install pycryptodome"
             )
         
-        iv = encrypted_data[:16]
-        ciphertext = encrypted_data[16:]
+        # Linux Chromium uses fixed IV of 16 spaces
+        cipher = AES.new(key, AES.MODE_CBC, iv=LINUX_DEFAULT_IV)
+        decrypted = cipher.decrypt(encrypted_data)
         
-        cipher = AES.new(key, AES.MODE_CBC, iv=iv)
-        decrypted = cipher.decrypt(ciphertext)
+        # For data longer than 32 bytes, skip the 32-byte header
+        # This header contains encrypted random data that produces garbage
+        if len(encrypted_data) > 32:
+            decrypted = decrypted[32:]
         
         return unpad(decrypted, AES.block_size)
 
