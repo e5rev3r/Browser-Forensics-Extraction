@@ -213,7 +213,7 @@ CHROMIUM_QUERIES = {
     },
     "Cookies": {
         "all_cookies": """
-            SELECT host_key, name, path,
+            SELECT host_key, name, path, encrypted_value,
                    datetime((creation_utc/1000000)-11644473600, 'unixepoch') as created,
                    datetime((expires_utc/1000000)-11644473600, 'unixepoch') as expires,
                    datetime((last_access_utc/1000000)-11644473600, 'unixepoch') as accessed,
@@ -222,7 +222,8 @@ CHROMIUM_QUERIES = {
             FROM cookies ORDER BY last_access_utc DESC
         """,
         "session_cookies": """
-            SELECT host_key, name, datetime((creation_utc/1000000)-11644473600, 'unixepoch') as created,
+            SELECT host_key, name, encrypted_value,
+                   datetime((creation_utc/1000000)-11644473600, 'unixepoch') as created,
                    is_secure, is_httponly
             FROM cookies WHERE is_persistent = 0 OR expires_utc = 0 ORDER BY last_access_utc DESC
         """,
@@ -230,6 +231,16 @@ CHROMIUM_QUERIES = {
             SELECT host_key, COUNT(*) as count,
                    MAX(datetime((last_access_utc/1000000)-11644473600, 'unixepoch')) as accessed
             FROM cookies GROUP BY host_key ORDER BY count DESC LIMIT 100
+        """,
+        "auth_cookies": """
+            SELECT host_key, name, encrypted_value, path,
+                   datetime((creation_utc/1000000)-11644473600, 'unixepoch') as created,
+                   datetime((expires_utc/1000000)-11644473600, 'unixepoch') as expires,
+                   is_secure, is_httponly
+            FROM cookies 
+            WHERE name LIKE '%token%' OR name LIKE '%session%' OR name LIKE '%auth%' 
+               OR name LIKE '%jwt%' OR name LIKE '%sid%' OR name LIKE '%login%'
+            ORDER BY last_access_utc DESC
         """,
     },
     "Login Data": {
